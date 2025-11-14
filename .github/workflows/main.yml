@@ -1,96 +1,88 @@
 name: Measure loading times
 on:
-    workflow_dispatch:
+  workflow_dispatch:
 
 jobs:
-    build-and-deploy:
-        runs-on: ${{ matrix.os }}
+  build-and-deploy:
+    runs-on: ${{ matrix.os }}
 
-        strategy:
-            fail-fast: false
-            matrix:
-                julia-version: ["1.6", "1.7", "1.8", "1.9", "1.10", "1.11", "~1.12.0-0"]
-                os: [ubuntu-latest]
+    strategy:
+      fail-fast: false
+      matrix:
+        julia-channel: ["1.6", "1.9", "1.10", "1.11", "1.12", "pr60139"]
+        os: [ubuntu-latest]
 
-        steps:
-            - name: Checkout this repository
-              uses: actions/checkout@v4
-              
+    steps:
+      - name: Checkout this repository
+        uses: actions/checkout@v4
 
-            - name: Install Julia
-              uses: julia-actions/setup-julia@v2
-              with:
-                  version: ${{ matrix.julia-version }}
-                  
+      - name: Install Julia
+        uses: julia-actions/install-juliaup@v2
+        with:
+          channel: ${{ matrix.julia-channel }}
 
-            - id: computefilename
-              run: |
-                julia -e '
-                  import Dates
-                  out = replace(replace(string(Dates.now()), r"[:.]" => "-"), r"[TZ]" => "_") * "_julia_" * string(VERSION)
-                  write("out", out)'
-                echo "FOLDER_NAME=$(cat out)" >> $GITHUB_ENV
+      - id: computefilename
+        run: |
+          julia -e '
+            import Dates
+            out = replace(replace(string(Dates.now()), r"[:.]" => "-"), r"[TZ]" => "_") * "_julia_" * string(VERSION)
+            write("out", out)'
+          echo "FOLDER_NAME=$(cat out)" >> $GITHUB_ENV
 
+      - name: Get Julia depot path
+        id: finddepot
+        run: |
+          julia -e '
+            out = first(DEPOT_PATH)
+            write("out", out)'
+          echo "JULIA_DEPOT=$(cat out)" >> $GITHUB_ENV
 
-            - name: Get Julia depot path
-              id: finddepot
-              run: |
-                julia -e '
-                  out = first(DEPOT_PATH)
-                  write("out", out)'
-                echo "JULIA_DEPOT=$(cat out)" >> $GITHUB_ENV
+      # Running the notebook most_downloaded_packages.jl will generate the file
+      # output/top_packages_sorted_with_deps.txt
+      #
+      # We could just run the notebook directly (`julia most_downloaded_packages.jl`)...
+      # But we run it with PlutoSliderServer to also get an HTML export of the Pluto notebook
+      # which gets uploaded as github action artifact, which can help with debugging if something goes wrong.
+      - name: Get most downloaded packages
+        run: |
+          julia -e 'using Pkg
+            Pkg.activate(mktempdir())
+            Pkg.add([
+              Pkg.PackageSpec(name="PlutoSliderServer", version="1"),
+              Pkg.PackageSpec(name="Pluto", version="0.20"),
+            ])
 
+            import PlutoSliderServer
 
+            PlutoSliderServer.export_notebook("most_downloaded_packages.jl";
+            )'
 
-            # Running the notebook most_downloaded_packages.jl will generate the file 
-            # output/top_packages_sorted_with_deps.txt
-            # 
-            # We could just run the notebook directly (`julia most_downloaded_packages.jl`)... 
-            # But we run it with PlutoSliderServer to also get an HTML export of the Pluto notebook
-            # which gets uploaded as github action artifact, which can help with debugging if something goes wrong.
-            - name: Get most downloaded packages
-              run: |
-                julia -e 'using Pkg
-                  Pkg.activate(mktempdir())
-                  Pkg.add([
-                    Pkg.PackageSpec(name="PlutoSliderServer", version="1"),
-                    Pkg.PackageSpec(name="Pluto", version="0.20"),
-                  ])
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: most-popular-packages ${{ matrix.os }} ${{ matrix.julia-channel }}
+          path: output/top_packages_sorted_with_deps.txt
 
-                  import PlutoSliderServer
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: most-popular-packages-notebook ${{ matrix.os }} ${{ matrix.julia-channel }}
+          path: most_downloaded_packages.html
 
-                  PlutoSliderServer.export_notebook("most_downloaded_packages.jl";
-                  )'
+      - name: Clear Julia depot
+        run: rm -rf ${{ env.JULIA_DEPOT }}
 
-            - uses: actions/upload-artifact@v4
-              if: always()
-              with:
-                name: most-popular-packages ${{ matrix.os }} ${{ matrix.julia-version }}
-                path: output/top_packages_sorted_with_deps.txt
-            
-            - uses: actions/upload-artifact@v4
-              if: always()
-              with:
-                name: most-popular-packages-notebook ${{ matrix.os }} ${{ matrix.julia-version }}
-                path: most_downloaded_packages.html
-            
-            - name: Clear Julia depot
-              run: rm -rf ${{ env.JULIA_DEPOT }}
+      - name: 🚀
+        run: julia measure_loading_times.jl
 
-            - name: 🚀
-              run: julia measure_loading_times.jl
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: pkg-load-times ${{ matrix.os }} ${{ matrix.julia-channel }}
+          path: output/pkg_load_times.toml
 
-            - uses: actions/upload-artifact@v4
-              if: always()
-              with:
-                name: pkg-load-times ${{ matrix.os }} ${{ matrix.julia-version }}
-                path: output/pkg_load_times.toml
-
-
-            - uses: actions/upload-artifact@v4
-              if: always()
-              with:
-                name: ${{ env.FOLDER_NAME }}
-                path: output/*
-
-
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ${{ env.FOLDER_NAME }}
+          path: output/*
